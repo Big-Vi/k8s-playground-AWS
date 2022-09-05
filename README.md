@@ -1,1 +1,1 @@
-# k8s-playground-AWS
+# K8s Playground
