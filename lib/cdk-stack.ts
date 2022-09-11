@@ -1,4 +1,4 @@
-import { Stack, StackProps } from 'aws-cdk-lib';
+import { Stack, StackProps, CfnOutput } from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as iam from 'aws-cdk-lib/aws-iam';
@@ -41,13 +41,44 @@ export class CdkStack extends Stack {
       'allow HTTPS traffic from anywhere',
     );
 
+    kubeSG.addIngressRule(
+      ec2.Peer.anyIpv4(),
+      ec2.Port.allTraffic()
+    )
+
     // Role for the EC2 Instance
     const kubeRole = new iam.Role(this, 'kube-role', {
       assumedBy: new iam.ServicePrincipal('ec2.amazonaws.com')
     });
 
-    // EC2 Instance
-    const ec2Instance = new ec2.Instance(this, 'ec2-instance', {
+    const machineImage = ec2.MachineImage.fromSsmParameter(
+      '/aws/service/canonical/ubuntu/server/focal/stable/current/amd64/hvm/ebs-gp2/ami-id',
+    )
+
+    // EC2 Instance master
+    const ec2InstancMaster = new ec2.Instance(this, 'master', {
+      vpc: kubevpc,
+      vpcSubnets: {
+        subnetType: ec2.SubnetType.PUBLIC,
+      },
+      role: kubeRole,
+      securityGroup: kubeSG,
+      instanceType: ec2.InstanceType.of(
+        ec2.InstanceClass.BURSTABLE2,
+        ec2.InstanceSize.MEDIUM,
+      ),
+      machineImage: machineImage,
+      keyName: '2022-05',
+    });
+    // Load contents of script
+    const userDataScript = readFileSync('./lib/user-data.sh', 'utf8');
+    // Add the User Data script to the Instance
+    ec2InstancMaster.addUserData(userDataScript);
+
+    new CfnOutput(this, 'ssh command master', { value: 'ssh -i ~/2022-05.pem -o IdentitiesOnly=yes ubuntu@' + ec2InstancMaster.instancePublicIp })
+
+    // EC2 Instance worker
+    const ec2InstanceWorker = new ec2.Instance(this, 'worker', {
       vpc: kubevpc,
       vpcSubnets: {
         subnetType: ec2.SubnetType.PUBLIC,
@@ -58,15 +89,14 @@ export class CdkStack extends Stack {
         ec2.InstanceClass.BURSTABLE2,
         ec2.InstanceSize.MICRO,
       ),
-      machineImage: new ec2.AmazonLinuxImage({
-        generation: ec2.AmazonLinuxGeneration.AMAZON_LINUX_2,
-      }),
+      machineImage: machineImage,
       keyName: '2022-05',
     });
-    // Load contents of script
-    const userDataScript = readFileSync('./lib/user-data.sh', 'utf8');
+
     // Add the User Data script to the Instance
-    ec2Instance.addUserData(userDataScript);
+    ec2InstanceWorker.addUserData(userDataScript);
+
+    new CfnOutput(this, 'ssh command worker', { value: 'ssh -i ~/2022-05.pem -o IdentitiesOnly=yes ubuntu@' + ec2InstanceWorker.instancePublicIp })
 
   }
 }
